@@ -37,7 +37,6 @@ from src.config import APP_NAME, APP_VERSION, ASSETS_DIR, DEFAULT_HOTKEY_KEY, DE
 from src.hotkey_manager import HotkeyManager
 from src.ui.editor_window import EditorWindow
 from src.ui.overlay import ScreenOverlay
-from src.ui.toolbar import SnippingToolbar
 
 
 def _make_tray_icon() -> QPixmap:
@@ -77,7 +76,6 @@ class SnippingApp:
         # ── Khởi tạo các thành phần ──────────────────────────────────────────
         self._engine = CaptureEngine()
         self._overlay = ScreenOverlay()
-        self._toolbar = SnippingToolbar()
         self._hotkey = HotkeyManager(
             modifiers=DEFAULT_HOTKEY_MODIFIERS,
             key=DEFAULT_HOTKEY_KEY,
@@ -87,12 +85,8 @@ class SnippingApp:
         self._engine.capture_done.connect(self._on_capture_done)
         self._engine.capture_failed.connect(self._on_capture_failed)
 
-        self._overlay.region_selected.connect(self._on_region_selected)
+        self._overlay.capture_taken.connect(self._engine.process_capture)
         self._overlay.cancelled.connect(self._on_capture_cancelled)
-
-        self._toolbar.capture_requested.connect(self._on_capture_requested)
-        self._toolbar.hide_to_tray.connect(self._hide_toolbar)
-        self._toolbar.quit_requested.connect(self._quit)  # Nút X thoát app
 
         self._hotkey.activated.connect(self._on_hotkey_activated)
 
@@ -101,7 +95,13 @@ class SnippingApp:
 
         # ── Khởi động ─────────────────────────────────────────────────────────
         self._hotkey.start()
-        self._toolbar.show()
+        # Chờ nhận Hotkey, không cần bật cái gì lên màn hình
+        self._tray.showMessage(
+            APP_NAME,
+            "App đã sẵn sàng dưới background. Bấm Alt+Shift+S để chụp.",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
 
     # ─── System Tray ─────────────────────────────────────────────────────────
 
@@ -112,10 +112,6 @@ class SnippingApp:
         tray.setToolTip(f"{APP_NAME} v{APP_VERSION}\nAlt+Shift+S để chụp")
 
         menu = QMenu()
-
-        act_show = QAction("Hiện Toolbar", menu)
-        act_show.triggered.connect(self._show_toolbar)
-        menu.addAction(act_show)
 
         act_capture = QAction("Chụp ngay (Alt+Shift+S)", menu)
         act_capture.triggered.connect(self._on_hotkey_activated)
@@ -128,79 +124,27 @@ class SnippingApp:
         menu.addAction(act_quit)
 
         tray.setContextMenu(menu)
-        # Double-click vào tray icon → hiện lại toolbar
+        # Double-click vào tray icon → Chụp
         tray.activated.connect(
-            lambda reason: self._show_toolbar()
+            lambda reason: self._on_hotkey_activated()
             if reason == QSystemTrayIcon.ActivationReason.DoubleClick
             else None
         )
         tray.show()
         return tray
 
-    # ─── Hiện / ẩn toolbar ───────────────────────────────────────────────────
-
-    def _show_toolbar(self) -> None:
-        self._toolbar.show()
-        self._toolbar.raise_()
-        self._toolbar.activateWindow()
-
-    def _hide_toolbar(self) -> None:
-        self._toolbar.hide()
-        self._tray.showMessage(
-            APP_NAME,
-            "Thu nhỏ xuống khay. Double-click để mở lại.",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000,
-        )
-
     # ─── Xử lý hotkey / capture flow ─────────────────────────────────────────
 
     def _on_hotkey_activated(self) -> None:
-        """Hotkey toàn hệ thống được kích hoạt → bắt đầu flow chụp mặc định (Rectangle)."""
-        # Ẩn toolbar trước khi overlay xuất hiện
-        self._toolbar.hide()
-        # Một chút delay để toolbar kịp ẩn trước khi overlay render
+        """Hotkey toàn hệ thống được kích hoạt → bắt đầu flow Win11."""
         QTimer.singleShot(80, self._show_overlay)
 
     def _show_overlay(self) -> None:
-        """Hiện overlay chọn vùng."""
+        """Hiện overlay chọn vùng (bao gồm cả toolbar tự sinh)."""
         self._overlay.activate()
-
-    def _on_capture_requested(self, mode: CaptureMode, delay: int) -> None:
-        """Người dùng bấm nút Capture trên toolbar."""
-        self._current_mode = mode
-        self._current_delay = delay
-        self._toolbar.set_capture_enabled(False)
-
-        if mode == CaptureMode.RECTANGLE or mode == CaptureMode.FREEFORM:
-            # Ẩn toolbar → hiện overlay
-            self._toolbar.hide()
-            QTimer.singleShot(80, self._show_overlay)
-        elif mode == CaptureMode.FULLSCREEN:
-            # Ẩn toolbar → chụp sau delay
-            self._toolbar.hide()
-            QTimer.singleShot(100 + delay * 1000, self._capture_fullscreen)
-        elif mode == CaptureMode.WINDOW:
-            # Placeholder: chụp fullscreen
-            self._toolbar.hide()
-            QTimer.singleShot(100 + delay * 1000, self._capture_fullscreen)
-
-    def _capture_fullscreen(self) -> None:
-        """Chụp toàn màn hình (không cần overlay)."""
-        self._engine.capture_fullscreen(delay=0)  # delay đã xử lý ở QTimer
-
-    def _on_region_selected(self, region: QRect) -> None:
-        """Người dùng đã chọn xong vùng trên overlay."""
-        # Chụp vùng sau delay (đã được người dùng đặt trên toolbar)
-        QTimer.singleShot(
-            self._current_delay * 1000,
-            lambda: self._engine.capture_rectangle(region, delay=0),
-        )
 
     def _on_capture_done(self, result: CaptureResult) -> None:
         """Ảnh đã chụp xong → mở cửa sổ chỉnh sửa."""
-        self._toolbar.set_capture_enabled(True)
-        self._toolbar.show()
 
         # Đóng editor cũ nếu đang mở
         if self._editor and self._editor.isVisible():
@@ -212,8 +156,6 @@ class SnippingApp:
 
     def _on_capture_failed(self, error_msg: str) -> None:
         """Chụp thất bại → hiện thông báo lỗi."""
-        self._toolbar.set_capture_enabled(True)
-        self._toolbar.show()
         QMessageBox.critical(
             None,
             f"{APP_NAME} — Lỗi",
@@ -222,8 +164,7 @@ class SnippingApp:
 
     def _on_capture_cancelled(self) -> None:
         """Người dùng nhấn Escape trên overlay."""
-        self._toolbar.set_capture_enabled(True)
-        self._toolbar.show()
+        pass
 
     # ─── Thoát ───────────────────────────────────────────────────────────────
 

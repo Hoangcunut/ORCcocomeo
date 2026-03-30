@@ -32,6 +32,7 @@ from typing import Optional
 import requests
 from PIL import Image
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtWidgets import QApplication
 
 from src.config import (
     OCR_ENGINE_PREFERENCE,
@@ -474,6 +475,16 @@ class OcrEngine(QObject):
         lang_cfg = OCR_LANGUAGES[lang_index] if 0 <= lang_index < len(OCR_LANGUAGES) else OCR_LANGUAGES[0]
         tess_lang = lang_cfg["tess"]
         umi_lang  = lang_cfg["umi"]
+
+        # NOTE: Pre-import torch trên main thread để tránh lỗi WinError 1114 (DLL init)
+        # khi torch được load lần đầu bên trong QThread.
+        if preference in (EnginePreference.AUTO, EnginePreference.VIETOCR):
+            self.status_changed.emit("Đang tải thư viện OCR...")
+            QApplication.processEvents()
+            try:
+                import torch
+            except ImportError:
+                pass
 
         self._worker = OcrWorker(image, preference, tess_lang, umi_lang, remove_accent)
         self._worker.finished.connect(self._on_finished)

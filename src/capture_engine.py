@@ -68,16 +68,35 @@ class CaptureEngine(QObject):
     def capture_window(self, delay: int = 0) -> None:
         """
         Placeholder Giai đoạn 2: chụp cửa sổ đang focus.
-        Hiện tại chụp fullscreen thay thế.
+        Sẽ được thay thế bởi logic truyền ảnh thẳng từ overlay.
         """
         self._do_capture(mode=CaptureMode.WINDOW, region=None, delay=delay)
 
     def capture_freeform(self, delay: int = 0) -> None:
         """
         Placeholder Giai đoạn 2: chụp vùng đa giác tự do.
-        Hiện tại chụp fullscreen thay thế.
+        Sẽ được thay thế bởi logic truyền ảnh thẳng từ overlay.
         """
         self._do_capture(mode=CaptureMode.FREEFORM, region=None, delay=delay)
+
+    def process_capture(self, pil_image: Image.Image, mode: CaptureMode) -> None:
+        """
+        Nhận ảnh PIL trực tiếp (do Overlay gửi), lưu file, copy clipboard và phát tín hiệu hoàn thành.
+        """
+        try:
+            filepath = str(TEMP_SCREENSHOT)
+            pil_image.save(filepath, format="PNG")
+            self._copy_to_clipboard(pil_image)
+            
+            result = CaptureResult(
+                image=pil_image,
+                mode=mode,
+                filepath=filepath,
+                timestamp=time.time(),
+            )
+            self.capture_done.emit(result)
+        except Exception as exc:
+            self.capture_failed.emit(str(exc))
 
     # ─── Internal ────────────────────────────────────────────────────────────
 
