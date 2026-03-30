@@ -33,10 +33,12 @@ from PyQt6.QtWidgets import (
 )
 
 from src.capture_engine import CaptureEngine, CaptureMode, CaptureResult
-from src.config import APP_NAME, APP_VERSION, ASSETS_DIR, DEFAULT_HOTKEY_KEY, DEFAULT_HOTKEY_MODIFIERS
+from src.config import APP_NAME, APP_VERSION, ASSETS_DIR
 from src.hotkey_manager import HotkeyManager
 from src.ui.editor_window import EditorWindow
 from src.ui.overlay import ScreenOverlay
+from src.ui.home_window import HomeWindow
+from src.utils.settings import AppSettings
 
 
 def _make_tray_icon() -> QPixmap:
@@ -76,10 +78,13 @@ class SnippingApp:
         # ── Khởi tạo các thành phần ──────────────────────────────────────────
         self._engine = CaptureEngine()
         self._overlay = ScreenOverlay()
-        self._hotkey = HotkeyManager(
-            modifiers=DEFAULT_HOTKEY_MODIFIERS,
-            key=DEFAULT_HOTKEY_KEY,
-        )
+        self._home = HomeWindow()
+        
+        # Load phím tắt từ settings.json
+        mods = tuple(AppSettings.get("hotkey_modifiers"))
+        key = AppSettings.get("hotkey_key")
+        
+        self._hotkey = HotkeyManager(modifiers=mods, key=key)
 
         # ── Kết nối signals ───────────────────────────────────────────────────
         self._engine.capture_done.connect(self._on_capture_done)
@@ -89,19 +94,20 @@ class SnippingApp:
         self._overlay.cancelled.connect(self._on_capture_cancelled)
 
         self._hotkey.activated.connect(self._on_hotkey_activated)
+        
+        # Nối chức năng từ HomeWindow
+        self._home.capture_requested.connect(self._on_capture_requested)
+        self._home.hotkey_changed_signal.connect(self._on_hotkey_changed)
 
         # ── System Tray ───────────────────────────────────────────────────────
         self._tray = self._setup_tray()
 
         # ── Khởi động ─────────────────────────────────────────────────────────
         self._hotkey.start()
-        # Chờ nhận Hotkey, không cần bật cái gì lên màn hình
-        self._tray.showMessage(
-            APP_NAME,
-            "App đã sẵn sàng dưới background. Bấm Alt+Shift+S để chụp.",
-            QSystemTrayIcon.MessageIcon.Information,
-            3000,
-        )
+        # Hiển thị luôn Cửa sổ Home khi khởi động
+        self._home.show()
+        self._home.raise_()
+        self._home.activateWindow()
 
     # ─── System Tray ─────────────────────────────────────────────────────────
 
@@ -109,11 +115,17 @@ class SnippingApp:
         """Thiết lập icon khay hệ thống với menu chuột phải."""
         icon = QIcon(_make_tray_icon())
         tray = QSystemTrayIcon(icon, self._app)
-        tray.setToolTip(f"{APP_NAME} v{APP_VERSION}\nAlt+Shift+S để chụp")
+        
+        hk_str = " + ".join([m.strip("<>") for m in AppSettings.get("hotkey_modifiers")] + [AppSettings.get("hotkey_key")]).upper()
+        tray.setToolTip(f"{APP_NAME} v{APP_VERSION}\n{hk_str} để chụp")
 
         menu = QMenu()
+        
+        act_home = QAction("Mở Cửa Sổ Chính", menu)
+        act_home.triggered.connect(self._show_home)
+        menu.addAction(act_home)
 
-        act_capture = QAction("Chụp ngay (Alt+Shift+S)", menu)
+        act_capture = QAction(f"Chụp ngay ({hk_str})", menu)
         act_capture.triggered.connect(self._on_hotkey_activated)
         menu.addAction(act_capture)
 
@@ -124,24 +136,56 @@ class SnippingApp:
         menu.addAction(act_quit)
 
         tray.setContextMenu(menu)
-        # Double-click vào tray icon → Chụp
+        # Double-click vào tray icon → Mở Home
         tray.activated.connect(
-            lambda reason: self._on_hotkey_activated()
+            lambda reason: self._show_home()
             if reason == QSystemTrayIcon.ActivationReason.DoubleClick
             else None
         )
         tray.show()
         return tray
 
+    def _show_home(self):
+        """Hiện lại cửa sổ Home từ Taskbar tray."""
+        self._home.show()
+        self._home.raise_()
+        self._home.activateWindow()
+
+    def _on_hotkey_changed(self, modifiers: list, key: str) -> None:
+        """Cập nhật Hotkey cho ứng dụng và hiển thị Tray tooltip."""
+        # Update listener ngầm
+        self._hotkey.update_hotkey(tuple(modifiers), key)
+        # Sửa Tooltip tray
+        hk_str = " + ".join([m.strip("<>") for m in modifiers] + [key]).upper()
+        self._tray.setToolTip(f"{APP_NAME} v{APP_VERSION}\n{hk_str} để chụp")
+        # Đổi title nút trong context menu
+        for act in self._tray.contextMenu().actions():
+            if "Chụp ngay" in act.text():
+                act.setText(f"Chụp ngay ({hk_str})")
+
     # ─── Xử lý hotkey / capture flow ─────────────────────────────────────────
 
     def _on_hotkey_activated(self) -> None:
         """Hotkey toàn hệ thống được kích hoạt → bắt đầu flow Win11."""
+        self._home.hide()
         QTimer.singleShot(80, self._show_overlay)
 
     def _show_overlay(self) -> None:
         """Hiện overlay chọn vùng (bao gồm cả toolbar tự sinh)."""
         self._overlay.activate()
+        
+    def _on_capture_requested(self, mode: CaptureMode, delay: int) -> None:
+        """Người dùng bấm nút + New trên cửa sổ chính."""
+        self._home.hide() # Giấu cửa sổ Home
+        
+        # Chuyển mode cho overlay
+        self._overlay.set_mode(mode)
+
+        if mode in (CaptureMode.RECTANGLE, CaptureMode.FREEFORM, CaptureMode.WINDOW):
+            QTimer.singleShot(delay * 1000, self._show_overlay)
+        elif mode == CaptureMode.FULLSCREEN:
+            # Full screen sẽ hiện overlay ảo và bóp lập tức
+            QTimer.singleShot(delay * 1000, self._show_overlay)
 
     def _on_capture_done(self, result: CaptureResult) -> None:
         """Ảnh đã chụp xong → mở cửa sổ chỉnh sửa."""
