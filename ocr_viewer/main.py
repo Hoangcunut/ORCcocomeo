@@ -23,6 +23,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 # ─── Hằng số ─────────────────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ def _pick_file() -> str | None:
 def main() -> None:
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)

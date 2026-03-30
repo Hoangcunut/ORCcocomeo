@@ -233,6 +233,7 @@ class SnippingApp:
 def main() -> None:
     """Hàm khởi động chính."""
     # Bật High DPI scaling cho màn hình 2K/4K
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
