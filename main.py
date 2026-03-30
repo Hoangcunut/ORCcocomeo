@@ -17,6 +17,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Eagerly import torch to prevent WinError 1114 when PyQt6 is loaded first
+try:
+    import torch
+except ImportError:
+    pass
+
 from PyQt6.QtCore import QRect, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPixmap
 from PyQt6.QtWidgets import (

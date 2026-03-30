@@ -24,6 +24,9 @@ from PyQt6.QtWidgets import (
     QLabel, QProgressBar, QPushButton, QFrame, QMessageBox,
 )
 
+from src.config import OCR_ENGINE_PREFERENCE
+from src.ocr_engine import EnginePreference
+
 
 # ─── Worker Thread ─────────────────────────────────────────────────────────────
 
@@ -277,6 +280,17 @@ class ViewerApp:
         self._splash = SplashWindow(image, image_path)
         self._splash.cancel_requested.connect(self._on_cancel)
         self._splash.show()
+
+        engine_pref = EnginePreference(OCR_ENGINE_PREFERENCE)
+
+        # Pre-import torch trên main thread để tránh WinError 1114
+        if engine_pref in (EnginePreference.AUTO, EnginePreference.VIETOCR):
+            self._splash.update_status("Đang tải thư viện AI...")
+            QApplication.processEvents()
+            try:
+                import torch
+            except ImportError:
+                pass
 
         # Chạy OCR trong background
         self._worker = _OcrWorker(image)

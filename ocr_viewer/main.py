@@ -18,10 +18,19 @@ import os
 import sys
 from pathlib import Path
 
+# Eagerly import torch to prevent WinError 1114 when PyQt6 is loaded first
+try:
+    import torch
+except ImportError:
+    pass
+
 # Đảm bảo import được từ thư mục gốc (custom-snipping-tool/)
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+from src.config import OCR_ENGINE_PREFERENCE
+from src.ocr_engine import EnginePreference
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
