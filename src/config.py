@@ -18,8 +18,15 @@ APP_AUTHOR: str = "Custom"
 
 # ─── Đường dẫn ───────────────────────────────────────────────────────────────
 
-# Thư mục gốc dự án (2 cấp trên config.py → custom-snipping-tool/)
-PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+import sys
+
+# Thư mục gốc dự án
+if getattr(sys, 'frozen', False):
+    # Khi chạy dạng PyInstaller compiled
+    PROJECT_ROOT: Path = Path(sys.executable).parent
+else:
+    # Khi chạy dev mode
+    PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 # Thư mục lưu ảnh tạm thời
 TEMP_DIR: Path = PROJECT_ROOT / "temp"
@@ -31,37 +38,55 @@ TEMP_SCREENSHOT: Path = TEMP_DIR / "last_screenshot.png"
 # Thư mục assets (icon, ...)
 ASSETS_DIR: Path = PROJECT_ROOT / "assets"
 
+# Thiết lập biến môi trường TORCH_HOME để lưu tải trọng VietOCR vào engines/vietocr/.cache
+os.environ["TORCH_HOME"] = str(PROJECT_ROOT / "engines" / "vietocr" / ".cache")
+
 # ─── OCR Engine Configuration ────────────────────────────────────────────────
 
 # ── Umi-OCR ──────────────────────────────────────────────────────────────────
-# Port HTTP API mặc định của Umi-OCR (có thể đổi trong Umi-OCR Settings)
+# Port HTTP API mặc định của Umi-OCR
 UMI_OCR_HOST: str = os.environ.get("UMI_OCR_HOST", "127.0.0.1:1224")
 
-# Đường dẫn tới Umi-OCR.exe (bundle cùng app hoặc tìm trong PATH)
-# Thứ tự tìm: ./umi-ocr/Umi-OCR.exe → PATH → None (báo chưa cài)
-_UMI_OCR_BUNDLE: Path = PROJECT_ROOT / "umi-ocr" / "Umi-OCR.exe"
-UMI_OCR_EXE_PATH: Path | None = _UMI_OCR_BUNDLE if _UMI_OCR_BUNDLE.exists() else None
+# Đường dẫn tới Umi-OCR.exe (tìm trong engines/, sau đó fallback dev mode)
+_UMI_OCR_BUNDLE: Path = PROJECT_ROOT / "engines" / "umi-ocr" / "UmiOCR.exe"
+_UMI_OCR_DEV: Path = PROJECT_ROOT / "umi-ocr" / "UmiOCR.exe"
+
+if _UMI_OCR_BUNDLE.exists():
+    UMI_OCR_EXE_PATH: Path | None = _UMI_OCR_BUNDLE
+elif _UMI_OCR_DEV.exists():
+    UMI_OCR_EXE_PATH = _UMI_OCR_DEV
+else:
+    UMI_OCR_EXE_PATH = None
 
 # Timeout khi gọi API (giây)
 UMI_OCR_CONNECT_TIMEOUT: float = 5.0
 UMI_OCR_READ_TIMEOUT: float    = 60.0
 
 # ── Tesseract ─────────────────────────────────────────────────────────────────
-# Thứ tự tìm exe: ./tesseract/tesseract.exe → C:/Program Files/Tesseract-OCR → PATH
-_TESS_BUNDLE:   Path = PROJECT_ROOT / "tesseract" / "tesseract.exe"
+# Tìm tesseract.exe trong engines/tesseract/, fallback dev/, fallback system
+_TESS_BUNDLE: Path = PROJECT_ROOT / "engines" / "tesseract" / "tesseract.exe"
+_TESS_DEV: Path = PROJECT_ROOT / "tesseract" / "tesseract.exe"
 _TESS_PROGFILE: Path = Path("C:/Program Files/Tesseract-OCR/tesseract.exe")
+
 if _TESS_BUNDLE.exists():
     TESSERACT_EXE_PATH: str | None = str(_TESS_BUNDLE)
+elif _TESS_DEV.exists():
+    TESSERACT_EXE_PATH = str(_TESS_DEV)
 elif _TESS_PROGFILE.exists():
     TESSERACT_EXE_PATH = str(_TESS_PROGFILE)
 else:
-    TESSERACT_EXE_PATH = None  # Dùng PATH hệ thống (nếu đã cài global)
+    TESSERACT_EXE_PATH = None
 
-# Thư mục tessdata — chứa file .traineddata ngôn ngữ
-_TESS_DATA_BUNDLE: Path = PROJECT_ROOT / "tesseract" / "tessdata"
-TESSERACT_DATA_DIR: str | None = (
-    str(_TESS_DATA_BUNDLE) if _TESS_DATA_BUNDLE.exists() else None
-)
+# Thư mục tessdata chứa file .traineddata
+_TESS_DATA_BUNDLE: Path = PROJECT_ROOT / "engines" / "tesseract" / "tessdata"
+_TESS_DATA_DEV: Path = PROJECT_ROOT / "tesseract" / "tessdata"
+
+if _TESS_DATA_BUNDLE.exists():
+    TESSERACT_DATA_DIR: str | None = str(_TESS_DATA_BUNDLE)
+elif _TESS_DATA_DEV.exists():
+    TESSERACT_DATA_DIR = str(_TESS_DATA_DEV)
+else:
+    TESSERACT_DATA_DIR = None
 
 # ── Ngôn ngữ OCR ─────────────────────────────────────────────────────────────
 # Ánh xạ: tên hiển thị → (tesseract_lang_code, umi_ocr_language_path)

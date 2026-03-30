@@ -962,14 +962,32 @@ class EditorWindow(QDialog):
             if status["umi_ready"]:
                 parts.append("✅ Umi-OCR đang chạy")
             else:
-                parts.append("⏳ Umi-OCR chưa chạy (sẽ tự kởi động)")
+                parts.append("⏳ Umi-OCR chưa chạy (sẽ tự khởi động)")
+            self._rb_umi.setEnabled(True)
         else:
             parts.append("⚠️ Umi-OCR chưa cài")
+            self._rb_umi.setEnabled(False)
 
         if status["tess_available"]:
             parts.append("✅ Tesseract sẵn sàng")
+            self._rb_tess.setEnabled(True)
         else:
             parts.append("⚠️ Tesseract chưa cài")
+            self._rb_tess.setEnabled(False)
+
+        # Nếu thiếu cả 2 thì không cho chạy Auto
+        if not status["umi_available"] and not status["tess_available"]:
+            self._rb_auto.setEnabled(False)
+        else:
+            self._rb_auto.setEnabled(True)
+
+        # Chuyển focus nếu engine hiện tại bị disable
+        if self._rb_umi.isChecked() and not self._rb_umi.isEnabled():
+            self._rb_auto.setChecked(True)
+        if self._rb_tess.isChecked() and not self._rb_tess.isEnabled():
+            self._rb_auto.setChecked(True)
+        if self._rb_auto.isChecked() and not self._rb_auto.isEnabled():
+            self._rb_vietocr.setChecked(True)
 
         self._lbl_engine_status.setText("  |  ".join(parts))
 
@@ -986,6 +1004,11 @@ class EditorWindow(QDialog):
     def _start_ocr(self) -> None:
         pref = self._get_preference()
         lang_index: int = self._combo_lang.currentData()  # type: ignore[assignment]
+
+        from src.umi_ocr_manager import UmiOcrManager
+        if pref in (EnginePreference.TESS_ONLY, EnginePreference.VIETOCR):
+            UmiOcrManager.instance().stop()
+
         remove_accent: bool = self._cb_remove_accent.isChecked()
         self._txt_ocr.clear()
         self._btn_overlay.hide()   # Ẩn nút overlay khi bắt đầu OCR mới
