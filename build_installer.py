@@ -130,6 +130,7 @@ def build_snipping() -> int:
     icon_path = HERE / "assets" / "icon.ico"
 
     args = [
+        "--noconfirm",  # Ghi đè thư mục cũ
         "--onedir",     # Thay vì --onefile
         "--windowed",
         "--name", "SnippingTool",
