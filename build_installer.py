@@ -79,16 +79,58 @@ def build_viewer() -> int:
     return rc
 
 
+import shutil
+
+def _copy_engines(dist_dir: Path) -> None:
+    """Sao chép các engine vào thư mục dist sau khi build onedir."""
+    engines_dest = dist_dir / "engines"
+    engines_dest.mkdir(parents=True, exist_ok=True)
+    
+    print("\n[+] Đang copy các OCR Engine vào bản Build...")
+
+    # 1. Cop lại Umi-OCR
+    umi_src = HERE / "umi-ocr"
+    if umi_src.exists():
+        umi_dest = engines_dest / "umi-ocr"
+        if not umi_dest.exists():
+            shutil.copytree(umi_src, umi_dest)
+            print(f"  -> Umi-OCR ({umi_src} -> {umi_dest})")
+    
+    # 2. Copy Tesseract
+    tess_src = HERE / "tesseract"
+    if tess_src.exists():
+        tess_dest = engines_dest / "tesseract"
+        if not tess_dest.exists():
+            shutil.copytree(tess_src, tess_dest)
+            print(f"  -> Tesseract ({tess_src} -> {tess_dest})")
+
+    # 3. Copy VietOCR models từ bộ nhớ tạm OS
+    vietocr_dest = engines_dest / "vietocr" / ".cache"
+    vietocr_dest.mkdir(parents=True, exist_ok=True)
+    
+    # Model cũ của VietOCR thường ở C:\Users\<user>\.cache\torch\hub\checkpoints 
+    # VGG Transformer: vgg_transformer.pth
+    # VGG seq2seq: vgg_seq2seq.pth
+    os_cache_dir = Path.home() / ".cache" / "torch" / "hub" / "checkpoints"
+    if os_cache_dir.exists():
+        hub_dest = vietocr_dest / "hub" / "checkpoints"
+        hub_dest.mkdir(parents=True, exist_ok=True)
+        for pth in os_cache_dir.glob("vgg_*.pth"):
+            shutil.copy2(pth, hub_dest / pth.name)
+            print(f"  -> VietOCR model: {pth.name} vào {hub_dest}")
+            
+    print("[+] Hoàn thành copy Engines!\n")
+
 def build_snipping() -> int:
-    """Build Custom Snipping Tool."""
+    """Build Custom Snipping Tool dạng Modular Dir."""
     print("=" * 60)
-    print("  Building: Custom Snipping Tool (SnippingTool.exe)")
+    print("  Building: Custom Snipping Tool (SnippingTool Dir)")
     print("=" * 60)
 
     icon_path = HERE / "assets" / "icon.ico"
 
     args = [
-        "--onefile",
+        "--onedir",     # Thay vì --onefile
         "--windowed",
         "--name", "SnippingTool",
         "--clean",
@@ -108,9 +150,13 @@ def build_snipping() -> int:
     args.append(str(HERE / "main.py"))
 
     rc = _run_pyinstaller(args)
-    _report("SnippingTool.exe", rc)
+    if rc == 0:
+        dist_dir = HERE / "dist" / "SnippingTool"
+        if dist_dir.exists():
+            _copy_engines(dist_dir)
+            
+    _report("SnippingTool/SnippingTool.exe", rc)
     return rc
-
 
 def _report(name: str, rc: int) -> None:
     exe = HERE / "dist" / name
