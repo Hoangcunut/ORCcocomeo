@@ -1,0 +1,43 @@
+# ============================================================
+# Requirements cho Custom Snipping Tool
+# ============================================================
+
+# GUI framework
+PyQt6>=6.6.0
+
+# WebEngine — render OCR text overlay (selectable như browser)
+PyQt6-WebEngine>=6.6.0
+
+# Chụp màn hình nhanh
+mss>=9.0.1
+
+# Xử lý ảnh
+Pillow>=10.3.0
+
+# Global hotkey
+pynput>=1.7.7
+
+# HTTP client — gọi Umi-OCR API
+requests>=2.31.0
+
+# OCR — Tesseract wrapper (detection + fallback recognition)
+pytesseract>=0.3.10
+
+# ============================================================
+# OCR Overlay — VietOCR (Tiếng Việt chính xác)
+# ============================================================
+# VietOCR: recognition model Tiếng Việt (Transformer/seq2seq)
+# Model ~100MB, auto-download lần đầu chạy → cache offline
+vietocr>=0.4.5
+
+# PyTorch — runtime cho VietOCR (CPU-only để portable)
+# Cài thủ công với lệnh phù hợp CPU/GPU:
+#   CPU: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   GPU: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchvision>=0.15.0
+
+# ============================================================
+# Build (cài toàn cục, không để trong venv project)
+# ============================================================
+#   pip install pyinstaller  (để build .exe)

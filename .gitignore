@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# VietOCR / Torch model cache (tải về lần đầu, không cần commit)
+~/.cache/vietocr/
+*.pt
+*.pth
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs & temp
+*.log
+temp/
+tmp/
+
+# Umi-OCR binary (lớn, dùng Release để phân phối)
+umi-ocr/
+
+# Executable (publish qua GitHub Releases)
+*.exe
+*.msi
+*.dmg
