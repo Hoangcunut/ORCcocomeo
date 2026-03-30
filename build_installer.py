@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 def _run_pyinstaller(args: list[str]) -> int:
     """Chạy PyInstaller và trả về exit code."""
     cmd = [sys.executable, "-m", "PyInstaller"] + args
-    print(f"\n▶  {' '.join(cmd)}\n")
+    print(f"\n>>> {' '.join(cmd)}\n")
     return subprocess.run(cmd, cwd=HERE).returncode
 
 
