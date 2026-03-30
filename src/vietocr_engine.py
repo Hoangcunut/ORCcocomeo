@@ -169,7 +169,6 @@ class VietOCREngine:
         Returns list of (x, y, w, h).
         """
         import pytesseract
-        import pandas as pd
         from src.config import TESSERACT_EXE_PATH, TESSERACT_DATA_DIR
 
         if TESSERACT_EXE_PATH:
@@ -191,7 +190,7 @@ class VietOCREngine:
             return []
 
         # Nhóm theo line_num để lấy bounding box từng dòng
-        line_boxes: dict[tuple, list] = {}
+        line_boxes: dict[tuple, dict] = {}
         n = len(data["level"])
         for i in range(n):
             if int(data["conf"][i]) < 10:   # bỏ detection độ tin thấp

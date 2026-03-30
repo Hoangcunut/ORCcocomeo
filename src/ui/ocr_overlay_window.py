@@ -1,405 +1,351 @@
 """
 ocr_overlay_window.py
 ---------------------
-Cửa sổ xem ảnh + text overlay có thể bôi đen / copy như trình duyệt.
+Giao diện xem kết quả OCR dưới dạng một lớp văn bản trong suốt (Invisible Text Layer)
+có thể chọn, bôi đen, nhấp chuột và sao chép như trên trình duyệt nguyên bản.
 
-  ┌─────────────────────────────────────────────┐
-  │  Toolbar: [X Close] [🔍+] [🔍-] [📋 Copy]  │
-  │─────────────────────────────────────────────│
-  │  QWebEngineView:                            │
-  │  ┌──────────ảnh gốc──────────┐              │
-  │  │  <span>Tiếng Việt</span>  │  ← select   │
-  │  │  <span>đầy đủ dấu</span>  │  ← copy     │
-  │  └────────────────────────────┘             │
-  └─────────────────────────────────────────────┘
-
-Text selection: native browser selection (drag, Ctrl+A, Ctrl+C).
-Draggable: nhấn giữ titlebar / bất kỳ vùng trống để kéo.
+Tối ưu:
+  - QWebEngineView được lazy-import để tránh bắt buộc PyQt6-WebEngine khi không dùng
+  - Ảnh lớn sẽ được scale down trước khi encode base64 để giảm bộ nhớ
+  - Copy All Text button cho phép copy toàn bộ nội dung không cần bôi đen
+  - Zoom in/out bằng Ctrl+Scroll
 """
 
 from __future__ import annotations
 
 import base64
+import html as html_mod
 from io import BytesIO
-from typing import List, Optional
 
 from PIL import Image
 from PyQt6.QtCore import Qt, QPoint, QUrl
+from PyQt6.QtGui import QMouseEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QSizeGrip, QFrame,
+    QPushButton, QLabel, QApplication
 )
-from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut
-from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-from src.vietocr_engine import OcrOverlayResult, WordBox
-
-
-# ─── HTML Template ────────────────────────────────────────────────────────────
-
-_HTML_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<style>
-* {{ margin: 0; padding: 0; box-sizing: border-box; user-select: none; }}
-html, body {{ background: #1a1a2e; overflow: hidden; width: 100%; height: 100%; }}
-
-#container {{
-  position: relative;
-  display: inline-block;
-  /* width & height set via JS */
-}}
-
-#img-layer {{
-  display: block;
-  width: {img_width}px;
-  height: {img_height}px;
-  image-rendering: auto;
-}}
-
-/* Lớp text overlay — toàn bộ container, trong suốt */
-#text-layer {{
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  pointer-events: none;  /* click xuyên qua xuống ảnh khi không chọn text */
-}}
-
-/* Từng dòng text */
-.txt-box {{
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  user-select: text;
-  pointer-events: all;
-  color: transparent;          /* ẩn text, chỉ hiện khi select */
-  background: transparent;
-  font-family: Arial, sans-serif;
-  line-height: 1;
-  padding: 0 1px;
-  border-radius: 2px;
-  transition: background 0.1s;
-}}
-
-/* Khi hover: hiện viền nhẹ để user biết có text */
-.txt-box:hover {{
-  background: rgba(100, 180, 255, 0.18);
-  outline: 1px dashed rgba(100, 180, 255, 0.5);
-}}
-
-/* Khi select: highlight xanh đậm */
-::selection {{
-  color: #ffffff;
-  background: rgba(0, 120, 255, 0.65);
-}}
-
-/* Scroll wrapper */
-#scroll-wrapper {{
-  width: 100vw;
-  height: 100vh;
-  overflow: auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
-  background: #1a1a2e;
-}}
-</style>
-</head>
-<body>
-<div id="scroll-wrapper">
-  <div id="container" style="width:{img_width}px;height:{img_height}px;">
-    <img id="img-layer" src="data:image/png;base64,{img_b64}" draggable="false" />
-    <div id="text-layer">
-{text_spans}
-    </div>
-  </div>
-</div>
-<script>
-// Ctrl+A: select all text trong overlay
-document.addEventListener('keydown', function(e) {{
-  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {{
-    e.preventDefault();
-    var sel = window.getSelection();
-    var range = document.createRange();
-    range.selectNodeContents(document.getElementById('text-layer'));
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }}
-}});
-</script>
-</body>
-</html>
-"""
+# Lazy import — không import QWebEngineView ở top-level
+# để tránh crash nếu PyQt6-WebEngine chưa cài
+from src.vietocr_engine import OcrOverlayResult
 
 
-def _build_text_spans(word_boxes: List[WordBox], img_w: int, img_h: int) -> str:
-    """Sinh HTML spans định vị theo tọa độ pixel."""
-    spans = []
-    for wb in word_boxes:
-        if wb.is_empty:
-            continue
-        # font-size tỉ lệ theo chiều cao box, tối thiểu 8px
-        font_size = max(8, int(wb.height * 0.85))
-        text_escaped = (
-            wb.text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
-        spans.append(
-            f'      <span class="txt-box" '
-            f'style="left:{wb.x}px;top:{wb.y}px;'
-            f'width:{wb.width}px;height:{wb.height}px;'
-            f'font-size:{font_size}px;">'
-            f'{text_escaped}</span>'
-        )
-    return "\n".join(spans)
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+_TITLE_BAR_HEIGHT = 42
+_MAX_IMAGE_DIM = 3000  # Scale down nếu ảnh vượt quá pixel này
 
 
-def _image_to_base64(image: Image.Image) -> str:
-    """Chuyển PIL Image → base64 PNG string."""
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _pil_to_base64_png(image: Image.Image) -> str:
+    """Mã hoá PIL Image → Base64 PNG. Scale down nếu quá lớn."""
+    img = image.copy()
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    # Scale down ảnh quá lớn để giảm bộ nhớ WebEngine
+    if img.width > _MAX_IMAGE_DIM or img.height > _MAX_IMAGE_DIM:
+        img.thumbnail((_MAX_IMAGE_DIM, _MAX_IMAGE_DIM), Image.Resampling.LANCZOS)
     buf = BytesIO()
-    image.save(buf, format="PNG", optimize=False)
+    img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-# ─── OCR Overlay Window ───────────────────────────────────────────────────────
+def _scale_factor(image: Image.Image) -> float:
+    """Tính tỉ lệ thu nhỏ nếu ảnh đã bị scale down."""
+    if image.width <= _MAX_IMAGE_DIM and image.height <= _MAX_IMAGE_DIM:
+        return 1.0
+    return min(_MAX_IMAGE_DIM / image.width, _MAX_IMAGE_DIM / image.height)
+
+
+# ─── Window ──────────────────────────────────────────────────────────────────
 
 class OCROverlayWindow(QMainWindow):
     """
-    Cửa sổ độc lập hiển thị ảnh + text overlay có thể bôi đen / copy.
-
-    Draggable: nhấn giữ vùng titlebar tùy chỉnh để kéo.
-    Text selection: browser-native (drag, Ctrl+A, Ctrl+C / CmdC).
-
-    Usage:
-        win = OCROverlayWindow(pil_image, ocr_result)
-        win.show()
+    Cửa sổ độc lập (frameless, draggable) hiển thị ảnh + lớp text trong suốt.
+    Người dùng có thể bôi đen text → Ctrl+C để copy, hoặc bấm nút Copy All.
     """
 
     def __init__(
         self,
         image: Image.Image,
-        ocr_result: OcrOverlayResult,
-        parent=None,
+        overlay_result: OcrOverlayResult,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._image      = image
-        self._ocr_result = ocr_result
-        self._drag_pos: Optional[QPoint] = None
-        self._zoom       = 1.0
+        self._image = image
+        self._overlay_result = overlay_result
+        self._scale = _scale_factor(image)
 
-        self._setup_window()
-        self._setup_ui()
-        self._load_html()
-
-    # ── Window setup ───────────────────────────────────────────────────────────
-
-    def _setup_window(self) -> None:
-        self.setWindowTitle("📄 OCR Overlay Viewer")
+        # Frameless + luôn ở trên
         self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.FramelessWindowHint
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
-        # Kích thước ban đầu: tối đa 85% màn hình, tối thiểu 400×300
-        screen = QGuiApplication.primaryScreen()
-        if screen:
-            sg = screen.availableGeometry()
-            w = min(self._image.width  + 4,  int(sg.width()  * 0.85))
-            h = min(self._image.height + 60, int(sg.height() * 0.85))
-        else:
-            w, h = 800, 650
+        # Draggable state
+        self._is_dragging = False
+        self._drag_origin = QPoint()
 
-        self.resize(max(w, 400), max(h, 350))
-        self.setMinimumSize(350, 280)
+        self._build_ui()
+        self._setup_shortcuts()
 
-        # Căn giữa màn hình
-        if screen:
-            sg = screen.availableGeometry()
-            self.move(
-                sg.center().x() - self.width() // 2,
-                sg.center().y() - self.height() // 2,
-            )
+    # ─── UI Build ────────────────────────────────────────────────────────────
 
-    # ── UI layout ─────────────────────────────────────────────────────────────
+    def _build_ui(self) -> None:
+        # Kích thước cửa sổ
+        display_w = int(self._image.width * self._scale)
+        display_h = int(self._image.height * self._scale) + _TITLE_BAR_HEIGHT + 40
+        self.resize(max(display_w, 420), min(display_h, 920))
 
-    def _setup_ui(self) -> None:
-        central = QWidget(self)
-        central.setObjectName("central")
+        central = QWidget()
+        self.setCentralWidget(central)
+        central.setObjectName("overlay_central")
         central.setStyleSheet("""
-            #central {
-                background: #1a1a2e;
-                border: 1px solid #3a3a5c;
-                border-radius: 8px;
+            #overlay_central {
+                background-color: #1E1E22;
+                border: 1px solid #3E3E42;
+                border-radius: 6px;
             }
         """)
-        self.setCentralWidget(central)
 
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ── Titlebar (draggable) ───────────────────────────────────────────
-        titlebar = self._build_titlebar()
-        root_layout.addWidget(titlebar)
+        # ── Title bar (draggable) ────────────────────────────────────────────
+        title_bar = QWidget()
+        title_bar.setFixedHeight(_TITLE_BAR_HEIGHT)
+        title_bar.setStyleSheet(
+            "background: #2D2D30; border-top-left-radius: 6px; border-top-right-radius: 6px;"
+        )
+        tb_layout = QHBoxLayout(title_bar)
+        tb_layout.setContentsMargins(14, 0, 8, 0)
 
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("background: #3a3a5c; max-height: 1px;")
-        root_layout.addWidget(sep)
+        lbl_title = QLabel("📄 VietOCR Overlay — Bôi đen để copy")
+        lbl_title.setStyleSheet("color: #E0E0E0; font-weight: bold; font-size: 13px;")
+        tb_layout.addWidget(lbl_title)
 
-        # ── WebEngine view ─────────────────────────────────────────────────
+        lbl_hint = QLabel("  (kéo thanh này để di chuyển)")
+        lbl_hint.setStyleSheet("color: #666; font-size: 10px;")
+        tb_layout.addWidget(lbl_hint)
+        tb_layout.addStretch()
+
+        btn_copy_all = QPushButton("📋 Copy All")
+        btn_copy_all.setFixedHeight(28)
+        btn_copy_all.setToolTip("Copy toàn bộ nội dung OCR (Ctrl+Shift+C)")
+        btn_copy_all.setStyleSheet("""
+            QPushButton {
+                color: #ccc; background: rgba(255,255,255,8);
+                border: 1px solid #555; border-radius: 4px;
+                padding: 0 10px; font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
+        """)
+        btn_copy_all.clicked.connect(self._copy_all_text)
+        tb_layout.addWidget(btn_copy_all)
+
+        tb_layout.addSpacing(4)
+
+        btn_close = QPushButton("✕")
+        btn_close.setFixedSize(30, 30)
+        btn_close.setToolTip("Đóng (Esc)")
+        btn_close.setStyleSheet("""
+            QPushButton {
+                color: #ccc; background: transparent; border: none;
+                font-size: 14px; border-radius: 4px;
+            }
+            QPushButton:hover { background: #E81123; color: white; }
+        """)
+        btn_close.clicked.connect(self.close)
+        tb_layout.addWidget(btn_close)
+
+        # Mouse events cho title bar → draggable
+        title_bar.mousePressEvent = self._on_title_press
+        title_bar.mouseMoveEvent = self._on_title_move
+        title_bar.mouseReleaseEvent = self._on_title_release
+
+        root.addWidget(title_bar)
+
+        # ── WebEngine View ───────────────────────────────────────────────────
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
+
         self._web = QWebEngineView()
         self._web.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self._web.page().setBackgroundColor(Qt.GlobalColor.transparent)
-        root_layout.addWidget(self._web, stretch=1)
+        self._web.setHtml(self._build_html())
+        root.addWidget(self._web)
 
-        # ── Status bar ─────────────────────────────────────────────────────
-        self._lbl_status = QLabel(
-            f"  📊 {len(ocr_result.word_boxes)} dòng | "
-            f"{len(ocr_result.plain_text)} ký tự  "
-            if (ocr_result := self._ocr_result) else "  Sẵn sàng  "
-        )
-        self._lbl_status.setStyleSheet(
-            "color: #8888aa; font-size: 11px; padding: 3px 8px; background: #12122a;"
-        )
-        root_layout.addWidget(self._lbl_status)
+        # ── Bottom status ────────────────────────────────────────────────────
+        bottom = QWidget()
+        bottom.setFixedHeight(28)
+        bottom.setStyleSheet("background: #252529;")
+        bl = QHBoxLayout(bottom)
+        bl.setContentsMargins(12, 0, 12, 0)
+        word_count = len(self._overlay_result.word_boxes)
+        char_count = len(self._overlay_result.plain_text)
+        lbl_stats = QLabel(f"🔤 {word_count} dòng  •  {char_count} ký tự  •  Ctrl+Scroll zoom")
+        lbl_stats.setStyleSheet("color: #888; font-size: 10px;")
+        bl.addWidget(lbl_stats)
+        bl.addStretch()
+        root.addWidget(bottom)
 
-        # ── Shortcuts ──────────────────────────────────────────────────────
-        QShortcut(QKeySequence("Ctrl+W"), self).activated.connect(self.close)
+    def _setup_shortcuts(self) -> None:
         QShortcut(QKeySequence("Escape"), self).activated.connect(self.close)
-        QShortcut(QKeySequence("Ctrl+Plus"),  self).activated.connect(self._zoom_in)
-        QShortcut(QKeySequence("Ctrl+Minus"), self).activated.connect(self._zoom_out)
-        QShortcut(QKeySequence("Ctrl+0"),     self).activated.connect(self._zoom_reset)
+        QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_all_text)
 
-    def _build_titlebar(self) -> QWidget:
-        """Thanh tiêu đề có thể kéo được."""
-        bar = QWidget()
-        bar.setFixedHeight(42)
-        bar.setObjectName("titlebar")
-        bar.setStyleSheet("""
-            #titlebar {
-                background: #16213e;
-                border-radius: 8px 8px 0 0;
-            }
-            QPushButton {
-                background: transparent;
-                border: 1px solid #3a3a6e;
-                border-radius: 5px;
-                color: #ccccee;
-                font-size: 13px;
-                padding: 3px 10px;
-                min-width: 28px;
-            }
-            QPushButton:hover  { background: #2a2a5e; }
-            QPushButton:pressed { background: #1a1a4e; }
-            #btn-close:hover   { background: #a02020; border-color: #cc3030; }
-        """)
+    # ─── HTML Generation ─────────────────────────────────────────────────────
 
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 0, 8, 0)
-        layout.setSpacing(6)
+    def _build_html(self) -> str:
+        b64 = _pil_to_base64_png(self._image)
+        scale = self._scale
 
-        # Icon + title
-        lbl_title = QLabel("📄  OCR Overlay Viewer")
-        lbl_title.setStyleSheet("color: #ccccee; font-size: 13px; font-weight: 600;")
-        layout.addWidget(lbl_title)
-        layout.addStretch()
+        spans = []
+        for box in self._overlay_result.word_boxes:
+            # Tính toạ độ đã scale
+            sx = int(box.x * scale)
+            sy = int(box.y * scale)
+            sw = int(box.width * scale)
+            sh = int(box.height * scale)
+            fs = max(int(sh * 0.78), 9)
 
-        # Zoom controls
-        btn_zoom_out = QPushButton("🔍−")
-        btn_zoom_out.setToolTip("Thu nhỏ (Ctrl+−)")
-        btn_zoom_out.clicked.connect(self._zoom_out)
-        layout.addWidget(btn_zoom_out)
-
-        btn_zoom_in = QPushButton("🔍+")
-        btn_zoom_in.setToolTip("Phóng to (Ctrl++)")
-        btn_zoom_in.clicked.connect(self._zoom_in)
-        layout.addWidget(btn_zoom_in)
-
-        btn_zoom_reset = QPushButton("1:1")
-        btn_zoom_reset.setToolTip("Kích thước gốc (Ctrl+0)")
-        btn_zoom_reset.clicked.connect(self._zoom_reset)
-        layout.addWidget(btn_zoom_reset)
-
-        # Copy all
-        btn_copy = QPushButton("📋 Copy tất cả")
-        btn_copy.setToolTip("Copy toàn bộ text nhận dạng được")
-        btn_copy.clicked.connect(self._copy_all)
-        layout.addWidget(btn_copy)
-
-        # Close
-        btn_close = QPushButton("✕")
-        btn_close.setObjectName("btn-close")
-        btn_close.setToolTip("Đóng (Ctrl+W / Esc)")
-        btn_close.clicked.connect(self.close)
-        layout.addWidget(btn_close)
-
-        # Cho phép kéo cửa sổ qua titlebar
-        bar.mousePressEvent   = self._on_drag_start
-        bar.mouseMoveEvent    = self._on_drag_move
-        bar.mouseReleaseEvent = self._on_drag_end
-
-        return bar
-
-    # ── HTML generation ────────────────────────────────────────────────────────
-
-    def _load_html(self) -> None:
-        """Sinh HTML và load vào QWebEngineView."""
-        ocr  = self._ocr_result
-        img  = self._image
-
-        img_b64   = _image_to_base64(img)
-        text_spans = _build_text_spans(ocr.word_boxes, img.width, img.height)
-
-        html = _HTML_TEMPLATE.format(
-            img_width  = img.width,
-            img_height = img.height,
-            img_b64    = img_b64,
-            text_spans = text_spans,
-        )
-        self._web.setHtml(html, QUrl("about:blank"))
-
-    # ── Actions ────────────────────────────────────────────────────────────────
-
-    def _zoom_in(self) -> None:
-        self._zoom = min(self._zoom + 0.25, 4.0)
-        self._web.setZoomFactor(self._zoom)
-
-    def _zoom_out(self) -> None:
-        self._zoom = max(self._zoom - 0.25, 0.25)
-        self._web.setZoomFactor(self._zoom)
-
-    def _zoom_reset(self) -> None:
-        self._zoom = 1.0
-        self._web.setZoomFactor(1.0)
-
-    def _copy_all(self) -> None:
-        """Copy toàn bộ text nhận dạng vào clipboard."""
-        text = self._ocr_result.plain_text
-        if text:
-            QGuiApplication.clipboard().setText(text)
-            self._lbl_status.setText(
-                f"  ✅ Đã copy {len(text)} ký tự vào clipboard!  "
+            escaped = html_mod.escape(box.text, quote=True)
+            spans.append(
+                f'<span class="w" title="{escaped}" '
+                f'style="left:{sx}px;top:{sy}px;width:{sw}px;height:{sh}px;'
+                f'font-size:{fs}px;line-height:{sh}px;">'
+                f'{escaped}</span>'
             )
 
-    # ── Draggable window via titlebar ─────────────────────────────────────────
+        spans_html = "\n".join(spans)
+        img_w = int(self._image.width * scale)
+        img_h = int(self._image.height * scale)
 
-    def _on_drag_start(self, event) -> None:
+        return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+  html, body {{
+    background: #1a1a24;
+    overflow: auto;
+    /* Ngăn highlight ngoài vùng text */
+    user-select: none;
+    -webkit-user-select: none;
+  }}
+
+  .container {{
+    position: relative;
+    display: inline-block;
+    width: {img_w}px;
+    height: {img_h}px;
+    /* Shadow nhẹ quanh ảnh để tăng readability */
+    box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+    margin: 8px;
+  }}
+
+  .container img {{
+    display: block;
+    width: {img_w}px;
+    height: {img_h}px;
+    pointer-events: none;
+    -webkit-user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }}
+
+  .text-layer {{
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }}
+
+  /* Mỗi span text = 1 dòng OCR */
+  .w {{
+    position: absolute;
+    /* Near-invisible: mắt thường không thấy, selection vẫn hoạt động */
+    color: rgba(0, 0, 0, 0.002);
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+    pointer-events: all;
+    white-space: nowrap;
+    overflow: visible;
+    font-family: 'Segoe UI', 'Arial Unicode MS', sans-serif;
+    /* Scale chữ vừa khít box để selection khớp với ảnh */
+    transform-origin: left top;
+  }}
+
+  /* Hover: gợi ý người dùng biết có text ở đây */
+  .w:hover {{
+    background: rgba(80, 160, 255, 0.12);
+    border-radius: 2px;
+    outline: 1px dashed rgba(80, 160, 255, 0.35);
+  }}
+
+  /* Selection: contrast cao — chữ trắng nền xanh đậm */
+  .w::selection {{
+    background: rgba(0, 100, 220, 0.75);
+    color: #ffffff;
+  }}
+  .w::-moz-selection {{
+    background: rgba(0, 100, 220, 0.75);
+    color: #ffffff;
+  }}
+
+  /* Ctrl+A select all: highlight toàn bộ text layer */
+  .text-layer.all-selected .w {{
+    background: rgba(0, 100, 220, 0.35);
+  }}
+</style>
+</head>
+<body>
+<div class="container">
+  <img src="data:image/png;base64,{b64}" alt="OCR Image" draggable="false">
+  <div class="text-layer" id="tl">
+    {spans_html}
+  </div>
+</div>
+<script>
+/* Ctrl+A: chọn toàn bộ text */
+document.addEventListener('keydown', function(e) {{
+  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {{
+    e.preventDefault();
+    var sel = window.getSelection();
+    var range = document.createRange();
+    range.selectNodeContents(document.getElementById('tl'));
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }}
+}});
+</script>
+</body></html>"""
+
+    # ─── Copy All ────────────────────────────────────────────────────────────
+
+    def _copy_all_text(self) -> None:
+        text = self._overlay_result.plain_text
+        if text:
+            QApplication.clipboard().setText(text)
+
+    # ─── Draggable Title Bar ─────────────────────────────────────────────────
+
+    def _on_title_press(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
+            self._is_dragging = True
+            self._drag_origin = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
+            event.accept()
 
-    def _on_drag_move(self, event) -> None:
-        if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+    def _on_title_move(self, event: QMouseEvent) -> None:
+        if self._is_dragging and event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_origin)
+            event.accept()
 
-    def _on_drag_end(self, event) -> None:
-        self._drag_pos = None
+    def _on_title_release(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_dragging = False
+            event.accept()

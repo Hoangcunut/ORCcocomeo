@@ -122,7 +122,14 @@ OCR_DEFAULT_LANG_INDEX: int = 0
 # "auto"      → thử Umi-OCR trước, fallback Tesseract
 # "umi_only"  → chỉ Umi-OCR
 # "tess_only" → chỉ Tesseract (bảo mật tối đa, không cần server)
+# "vietocr"   → VietOCR (Tiếng Việt chính xác + overlay)
 OCR_ENGINE_PREFERENCE: str = os.environ.get("OCR_ENGINE", "auto")
+
+# ── VietOCR ───────────────────────────────────────────────────────────────────
+# Model name: "vgg_seq2seq" (nhanh, nhẹ) hoặc "vgg_transformer" (chính xác hơn)
+VIETOCR_MODEL: str = os.environ.get("VIETOCR_MODEL", "vgg_transformer")
+# Device: "cpu" (portable, không cần GPU) hoặc "cuda" (nhanh hơn nếu có NVIDIA GPU)
+VIETOCR_DEVICE: str = os.environ.get("VIETOCR_DEVICE", "cpu")
 
 # ─── Phím tắt hệ thống ───────────────────────────────────────────────────────
 
