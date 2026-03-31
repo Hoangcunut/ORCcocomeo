@@ -78,45 +78,25 @@ class UmiOcrManager:
         exe_dir  = str(Path(exe_path).parent)
 
         # ── KHỞI ĐỘNG UMI-OCR.EXE ───────────────────────────────────────────
-        # ROOT CAUSE KIẾN UMI-OCR CHẾT KHI GỌI TỪ MAIN.PY:
-        # 1. main.py ĐÃ inject đường dẫn "torch/lib" vào biến os.environ["PATH"]
-        #    để sửa lỗi C10.dll.
-        # 2. Umi-OCR dùng PaddleOCR, nên khi inherit PATH có chứa DLL của Torch, 
-        #    nó tải nhầm và lập tức bị "EXCEPTION_ACCESS_VIOLATION" -> Crash ngầm nín thinh!
-        # 3. Để sửa tận gốc: Ta PHẢI lọc bỏ các đường dẫn chứa chữ "torch" khỏi PATH
-        #    trước khi gọi Popen.
-
+        # GIẢI PHÁP DIỆT TẬN GỐC TẤT CẢ LỖI (WMI - Windows Management Instrumentation):
+        # Mọi biện pháp spawn qua Python (os, subprocess, ShellExecute) đều ít nhiều chia sẻ
+        # Process Tree. App chính đang gánh PyQt + đã bị nhiễm độc PATH thư mục Pytorch.
+        # Wmic gọi qua dịch vụ hệ thống của Windows để spawn thẳng Umi-OCR một cách ĐỘC LẬP TỔNG THỂ.
+        # Nó sẽ rỗng hoàn toàn, không thừa kế bất kỳ biến env, cwd hay file handle nào từ Python.
+        
         try:
-            minimal_env = {
-                k: os.environ[k]
-                for k in ("SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP",
-                           "USERNAME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-                           "PROGRAMFILES", "PROGRAMDATA", "COMPUTERNAME")
-                if k in os.environ
-            }
-
-            # Lọc toàn bộ đường dẫn dính dấp tới "torch" ra khỏi PATH
-            if "PATH" in minimal_env:
-                clean_path = os.pathsep.join(
-                    p for p in minimal_env["PATH"].split(os.pathsep)
-                    if "torch" not in p.lower()
-                )
-                minimal_env["PATH"] = clean_path
-
+            import platform
+            if platform.system() != "Windows":
+                return False
+                
+            # Cú pháp wmic chuẩn để đổi thư mục và dùng lệnh start
+            cmd = f'wmic process call create "cmd.exe /c cd /d \\"{exe_dir}\\" && start \\"\\" \\"{exe_path}\\""'
             import subprocess
-            proc = subprocess.Popen(
-                [exe_path],
-                cwd=exe_dir,
-                env=minimal_env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                close_fds=True,
-                creationflags=subprocess.DETACHED_PROCESS  # 0x00000008: Chạy hoàn toàn độc lập
-            )
-            self._pid = proc.pid
+            subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+            
             self._we_started_it = True
             return True
+            
         except Exception:
             return False
 
