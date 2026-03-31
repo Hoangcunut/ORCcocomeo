@@ -86,21 +86,8 @@ class UmiOcrManager:
         except Exception:
             pass
 
-        # ── Phương án 2: ShellExecute qua PowerShell ────────────────────────
-        try:
-            subprocess.Popen(
-                ["powershell", "-Command",
-                 f"Start-Process '{exe_path}' -WorkingDirectory '{exe_dir}'"],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self._we_started_it = True
-            return True
-        except Exception:
-            pass
-
-        # ── Phương án 3: subprocess với env hoàn toàn sạch ──────────────────
+        # ── Phương án 2: subprocess env sạch, KHÔNG dùng CREATE_NO_WINDOW ──
+        # Umi-OCR là GUI app — CREATE_NO_WINDOW block nó khởi động!
         try:
             minimal_env = {
                 k: os.environ[k]
@@ -115,9 +102,23 @@ class UmiOcrManager:
                 env=minimal_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                # KHÔNG dùng CREATE_NO_WINDOW — Umi-OCR là GUI app!
             )
             self._pid = proc.pid
+            self._we_started_it = True
+            return True
+        except Exception:
+            pass
+
+        # ── Phương án 3: ShellExecute qua PowerShell ────────────────────────
+        try:
+            subprocess.Popen(
+                ["powershell", "-Command",
+                 f"Start-Process '{exe_path}' -WorkingDirectory '{exe_dir}'"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
             self._we_started_it = True
             return True
         except Exception:
