@@ -78,11 +78,14 @@ class UmiOcrManager:
         exe_dir  = str(Path(exe_path).parent)
 
         # ── KHỞI ĐỘNG UMI-OCR.EXE ───────────────────────────────────────────
-        # QUAN TRỌNG: 
-        # 1. Phải set cwd = exe_dir để Umi-OCR tìm thấy model/dll. os.startfile KHÔNG set được.
-        # 2. KHÔNG dùng CREATE_NO_WINDOW vì Umi-OCR là GUI app, flag này có thể block khởi động.
-        # 3. Phải dùng môi trường (env) sạch, không copy từ os.environ của app để tránh conflict 
-        #    về PYTHONPATH, PYTHONUTF8, và PATH chứa thư viện của ứng dụng chính.
+        # ROOT CAUSE KIẾN UMI-OCR CHẾT KHI GỌI TỪ MAIN.PY:
+        # 1. main.py ĐÃ inject đường dẫn "torch/lib" vào biến os.environ["PATH"]
+        #    để sửa lỗi C10.dll.
+        # 2. Umi-OCR dùng PaddleOCR, nên khi inherit PATH có chứa DLL của Torch, 
+        #    nó tải nhầm và lập tức bị "EXCEPTION_ACCESS_VIOLATION" -> Crash ngầm nín thinh!
+        # 3. Để sửa tận gốc: Ta PHẢI lọc bỏ các đường dẫn chứa chữ "torch" khỏi PATH
+        #    trước khi gọi Popen.
+
         try:
             minimal_env = {
                 k: os.environ[k]
@@ -91,12 +94,25 @@ class UmiOcrManager:
                            "PROGRAMFILES", "PROGRAMDATA", "COMPUTERNAME")
                 if k in os.environ
             }
+
+            # Lọc toàn bộ đường dẫn dính dấp tới "torch" ra khỏi PATH
+            if "PATH" in minimal_env:
+                clean_path = os.pathsep.join(
+                    p for p in minimal_env["PATH"].split(os.pathsep)
+                    if "torch" not in p.lower()
+                )
+                minimal_env["PATH"] = clean_path
+
+            import subprocess
             proc = subprocess.Popen(
                 [exe_path],
                 cwd=exe_dir,
                 env=minimal_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=subprocess.DETACHED_PROCESS  # 0x00000008: Chạy hoàn toàn độc lập
             )
             self._pid = proc.pid
             self._we_started_it = True
