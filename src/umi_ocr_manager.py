@@ -95,18 +95,26 @@ class UmiOcrManager:
 
         try:
             exe = str(UMI_OCR_EXE_PATH)
-            # Khởi động Umi-OCR ẩn. Ép encoding UTF-8 để khắc phục lỗi Umi-OCR bị crash
-            # (UnicodeEncodeError) khi print log tiếng Trung lúc không hiện Console window.
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
-            
+
+            # QUAN TRỌNG: Dùng env sạch chỉ có system vars.
+            # os.environ.copy() chứa PYTHONUTF8, PYTHONPATH, _internal paths
+            # khiến Umi-OCR crash ngay khi start (xung đột Python/Paddle env).
+            system_vars = [
+                "SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP",
+                "USERNAME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+                "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
+                "COMPUTERNAME", "OS", "PROCESSOR_ARCHITECTURE",
+                "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)",
+            ]
+            clean_env = {k: os.environ[k] for k in system_vars if k in os.environ}
+            clean_env["PYTHONIOENCODING"] = "utf-8"
+
             self._process = subprocess.Popen(
                 [exe],
                 cwd=str(Path(exe).parent),
-                env=env,
+                env=clean_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                # Không tạo console window mới trên Windows
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             self._we_started_it = True

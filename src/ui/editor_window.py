@@ -831,7 +831,18 @@ class EditorWindow(QDialog):
         self._rb_umi     = QRadioButton("🌐  Chỉ Umi-OCR")
         self._rb_tess    = QRadioButton("🔒  Chỉ Tesseract (bảo mật tối đa)")
         self._rb_vietocr = QRadioButton("🇻🇳  VietOCR (Tiếng Việt, có overlay)")
-        self._rb_tess.setChecked(True)  # Mặc định Tesseract
+        self._rb_auto.setChecked(True)  # Mặc định Auto
+
+        # Kiểm tra torch có load được không — nếu không thì disable VietOCR
+        _torch_ok = False
+        try:
+            import torch
+            _torch_ok = True
+        except Exception:
+            pass
+        if not _torch_ok:
+            self._rb_vietocr.setEnabled(False)
+            self._rb_vietocr.setText("🇻🇳  VietOCR (không khả dụng — torch DLL lỗi)")
 
         for rb in (self._rb_auto, self._rb_umi, self._rb_tess, self._rb_vietocr):
             eg_layout.addWidget(rb)
@@ -1013,9 +1024,7 @@ class EditorWindow(QDialog):
         pref = self._get_preference()
         lang_index: int = self._combo_lang.currentData()  # type: ignore[assignment]
 
-        from src.umi_ocr_manager import UmiOcrManager
-        if pref in (EnginePreference.TESS_ONLY, EnginePreference.VIETOCR):
-            UmiOcrManager.instance().stop()
+        # Không cần dừng Umi-OCR — giữ nó chạy ngầm cho Auto/Umi mode
 
         remove_accent: bool = self._cb_remove_accent.isChecked()
         self._txt_ocr.clear()
