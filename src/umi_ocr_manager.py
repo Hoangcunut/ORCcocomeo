@@ -1,18 +1,17 @@
 """
 umi_ocr_manager.py
 ------------------
-Quản lý vòng đời (lifecycle) của tiến trình Umi-OCR.exe.
+Quản lý vòng đời Umi-OCR.exe.
 
-Chức năng:
-  - Kiểm tra Umi-OCR đã được cài (exe tồn tại) hay chưa.
-  - Kiểm tra Umi-OCR đang chạy (HTTP server sẵn sàng) hay chưa.
-  - Khởi động Umi-OCR.exe ở nền nếu chưa chạy.
-  - Dừng Umi-OCR.exe khi đóng app (nếu chính app này khởi động nó).
+CHIẾN LƯỢC KHỞI ĐỘNG:
+- Dùng os.startfile() — giống như user double-click exe.
+- Windows tự cấp môi trường sạch, hoàn toàn độc lập với Python env của app.
+- Không inherit env bẩn (PYTHONUTF8, PYTHONPATH, DLL paths) gây crash Umi-OCR.
 
 Thiết kế:
   - Singleton — chỉ một instance trong toàn app.
-  - Không block main thread (dùng threading.Thread để start/wait).
-  - Nếu user đã tự mở Umi-OCR trước → detect được, không start lại.
+  - is_ready() probe HTTP /api/ocr/get_options — nhẹ, nhanh.
+  - Nếu user đã tự mở Umi-OCR → detect được, không start lại.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from threading import Thread
 from typing import Optional
 
 import requests
@@ -34,16 +32,7 @@ from src.config import (
 
 
 class UmiOcrManager:
-    """
-    Singleton quản lý tiến trình Umi-OCR.exe.
-    
-    Usage:
-        mgr = UmiOcrManager.instance()
-        if mgr.is_available():        # exe đã có
-            if not mgr.is_ready():    # server chưa chạy
-                mgr.start()           # khởi động không block
-                mgr.wait_ready(15)    # chờ tối đa 15 giây
-    """
+    """Singleton quản lý tiến trình Umi-OCR.exe."""
 
     _instance: "UmiOcrManager | None" = None
 
@@ -54,20 +43,17 @@ class UmiOcrManager:
         return cls._instance
 
     def __init__(self) -> None:
-        self._process: Optional[subprocess.Popen] = None
-        self._we_started_it: bool = False   # Chỉ True nếu chính app này đã start
+        self._pid: Optional[int] = None  # PID của process ta đã start
+        self._we_started_it: bool = False
 
     # ─── Public API ───────────────────────────────────────────────────────────
 
     def is_available(self) -> bool:
-        """Kiểm tra Umi-OCR.exe có trên máy không (đã cài / bundle sẵn)."""
+        """Kiểm tra Umi-OCR.exe có trên máy không."""
         return UMI_OCR_EXE_PATH is not None and Path(UMI_OCR_EXE_PATH).exists()
 
     def is_ready(self) -> bool:
-        """
-        Kiểm tra Umi-OCR HTTP server đang phản hồi không.
-        Gọi nhanh (timeout 2s), không block lâu.
-        """
+        """Kiểm tra Umi-OCR HTTP server đang phản hồi không (timeout 2s)."""
         try:
             resp = requests.get(
                 f"http://{UMI_OCR_HOST}/api/ocr/get_options",
@@ -79,61 +65,66 @@ class UmiOcrManager:
 
     def start(self) -> bool:
         """
-        Khởi động Umi-OCR.exe ở nền (không block).
-        
-        Returns:
-            True nếu đã spawn process thành công.
-            False nếu exe không tồn tại hoặc đã chạy rồi.
+        Khởi động Umi-OCR.exe (không block).
+        Dùng os.startfile() — Windows tạo process hoàn toàn độc lập,
+        không inherit env Python, không xung đột DLL.
         """
         if not self.is_available():
             return False
         if self.is_ready():
-            return True   # Đã chạy rồi (do user mở hoặc lần trước)
+            return True  # Đã chạy rồi
 
-        if self._process and self._process.poll() is None:
-            return True   # Process chúng ta spawn còn sống
+        exe_path = str(UMI_OCR_EXE_PATH)
+        exe_dir  = str(Path(exe_path).parent)
 
+        # ── Phương án 1: os.startfile() ─────────────────────────────────────
+        # Giống user double-click — sạch nhất, không inherit bất kỳ env nào.
         try:
-            exe = str(UMI_OCR_EXE_PATH)
+            os.startfile(exe_path)
+            self._we_started_it = True
+            return True
+        except Exception:
+            pass
 
-            # QUAN TRỌNG: Dùng env sạch chỉ có system vars.
-            # os.environ.copy() chứa PYTHONUTF8, PYTHONPATH, _internal paths
-            # khiến Umi-OCR crash ngay khi start (xung đột Python/Paddle env).
-            system_vars = [
-                "SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP",
-                "USERNAME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-                "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
-                "COMPUTERNAME", "OS", "PROCESSOR_ARCHITECTURE",
-                "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)",
-            ]
-            clean_env = {k: os.environ[k] for k in system_vars if k in os.environ}
-            clean_env["PYTHONIOENCODING"] = "utf-8"
+        # ── Phương án 2: ShellExecute qua PowerShell ────────────────────────
+        try:
+            subprocess.Popen(
+                ["powershell", "-Command",
+                 f"Start-Process '{exe_path}' -WorkingDirectory '{exe_dir}'"],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._we_started_it = True
+            return True
+        except Exception:
+            pass
 
-            self._process = subprocess.Popen(
-                [exe],
-                cwd=str(Path(exe).parent),
-                env=clean_env,
+        # ── Phương án 3: subprocess với env hoàn toàn sạch ──────────────────
+        try:
+            minimal_env = {
+                k: os.environ[k]
+                for k in ("SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP",
+                           "USERNAME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+                           "PROGRAMFILES", "PROGRAMDATA", "COMPUTERNAME")
+                if k in os.environ
+            }
+            proc = subprocess.Popen(
+                [exe_path],
+                cwd=exe_dir,
+                env=minimal_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
+            self._pid = proc.pid
             self._we_started_it = True
             return True
         except Exception:
             return False
 
-    def wait_ready(self, timeout: float = 20.0, interval: float = 0.5) -> bool:
-        """
-        Chờ cho đến khi HTTP server của Umi-OCR phản hồi.
-        
-        Args:
-            timeout:  Tổng thời gian chờ tối đa (giây).
-            interval: Khoảng giữa các lần probe (giây).
-        
-        Returns:
-            True nếu server sẵn sàng trong timeout.
-            False nếu hết timeout mà vẫn chưa.
-        """
+    def wait_ready(self, timeout: float = 40.0, interval: float = 0.5) -> bool:
+        """Chờ HTTP server của Umi-OCR phản hồi (tối đa timeout giây)."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.is_ready():
@@ -142,20 +133,20 @@ class UmiOcrManager:
         return False
 
     def stop(self) -> None:
-        """
-        Dừng Umi-OCR.exe — chỉ dừng nếu chính app này đã khởi động nó.
-        Nếu user tự mở → không can thiệp.
-        """
-        if self._we_started_it and self._process and self._process.poll() is None:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=5)
-            except Exception:
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
-        self._process = None
+        """Dừng Umi-OCR — chỉ nếu chính app đã start nó, dùng taskkill."""
+        if not self._we_started_it:
+            return
+        try:
+            # Dùng taskkill thay vì terminate() vì ta không giữ process handle
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "Umi-OCR.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            pass
+        self._pid = None
         self._we_started_it = False
 
     def status_text(self) -> str:
