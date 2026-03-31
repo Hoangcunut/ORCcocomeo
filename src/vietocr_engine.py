@@ -82,7 +82,7 @@ class VietOCREngine:
             import pytesseract   # noqa: F401
             import vietocr       # noqa: F401
             return True
-        except ImportError:
+        except (ImportError, OSError):
             return False
 
     def recognize(

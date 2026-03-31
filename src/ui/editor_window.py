@@ -954,6 +954,14 @@ class EditorWindow(QDialog):
         self._ocr_engine.engine_used.connect(self._on_engine_used)
         self._ocr_engine.overlay_ready.connect(self._on_overlay_ready)
 
+    def closeEvent(self, event):
+        """Đóng cửa sổ Editor chỉ ẩn, không thoát app."""
+        # Hủy OCR đang chạy nếu có
+        if self._ocr_engine.running:
+            self._ocr_engine.cancel()
+        event.ignore()
+        self.hide()
+
     def _refresh_engine_status(self) -> None:
         """Cập nhật badge trạng thái engine khi mở OCR panel."""
         status = self._ocr_engine.check_engines()

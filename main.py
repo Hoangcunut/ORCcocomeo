@@ -14,23 +14,54 @@ Luồng chính:
 
 from __future__ import annotations
 
+import os
 import sys
 import io
 from pathlib import Path
 
-# [CRITICAL HOTFIX] PyTorch Windows DLL Init Bug
-# Trong môi trường PyInstaller --windowed, sys.stdout = None.
-# Các DLL C++ của PyTorch (đặc biệt là c10.dll / fbgemm.dll) sẽ quăng WinError 1114
-# nếu nó cố gắng in warning/log mà không có console hợp lệ. Ta phải mock stream:
+# ═══════════════════════════════════════════════════════════════════════════════
+# [CRITICAL HOTFIX] PyTorch c10.dll WinError 1114 — Giải pháp triệt để
+# ═══════════════════════════════════════════════════════════════════════════════
+# Vấn đề: PyInstaller --windowed mode trên Windows gây 2 lỗi chồng chất:
+#   1) sys.stdout/stderr = None → c10.dll crash khi cố log
+#   2) torch\lib không nằm trong DLL search path → OS không tìm thấy c10.dll
+#
+# Giải pháp: Mock stdout/stderr + Inject torch\lib vào DLL search path
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Bước 1: Mock stdout/stderr cho --windowed mode
 if sys.stdout is None:
     sys.stdout = io.StringIO()
 if sys.stderr is None:
     sys.stderr = io.StringIO()
 
-# Eagerly import torch to prevent WinError 1114 when PyQt6 is loaded first
+# Bước 2: Tìm và inject thư mục torch/lib vào DLL search path
+def _fix_torch_dll_path():
+    """Thêm torch\\lib vào DLL search path trước khi import torch."""
+    # Tìm torch/lib trong _internal (PyInstaller onedir)
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).parent / "_internal"
+    else:
+        base = Path(__file__).resolve().parent / ".venv" / "Lib" / "site-packages"
+
+    torch_lib = base / "torch" / "lib"
+    if torch_lib.exists():
+        torch_lib_str = str(torch_lib)
+        # Thêm vào PATH environment
+        os.environ["PATH"] = torch_lib_str + os.pathsep + os.environ.get("PATH", "")
+        # Thêm vào DLL search directories (Python 3.8+ trên Windows)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(torch_lib_str)
+            except OSError:
+                pass
+
+_fix_torch_dll_path()
+
+# Bước 3: Import torch (không bắt buộc — app vẫn chạy nếu thiếu torch)
 try:
     import torch
-except ImportError:
+except (ImportError, OSError):
     pass
 
 from PyQt6.QtCore import QRect, Qt, QTimer
@@ -48,6 +79,7 @@ from src.hotkey_manager import HotkeyManager
 from src.ui.editor_window import EditorWindow
 from src.ui.overlay import ScreenOverlay
 from src.ui.home_window import HomeWindow
+from src.umi_ocr_manager import UmiOcrManager
 from src.utils.settings import AppSettings
 
 
@@ -114,6 +146,12 @@ class SnippingApp:
 
         # ── Khởi động ─────────────────────────────────────────────────────────
         self._hotkey.start()
+
+        # Khởi động Umi-OCR ngầm (background) nếu đã cài sẵn
+        self._umi_mgr = UmiOcrManager.instance()
+        if self._umi_mgr.is_available() and not self._umi_mgr.is_ready():
+            self._umi_mgr.start()
+
         # Hiển thị luôn Cửa sổ Home khi khởi động
         self._home.show()
         self._home.raise_()
@@ -225,6 +263,11 @@ class SnippingApp:
     def _quit(self) -> None:
         """Dừng tất cả và thoát ứng dụng."""
         self._hotkey.stop()
+        # Dừng Umi-OCR nếu chính app đã khởi động nó
+        try:
+            self._umi_mgr.stop()
+        except Exception:
+            pass
         self._tray.hide()
         self._app.quit()
 

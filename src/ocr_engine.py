@@ -483,7 +483,7 @@ class OcrEngine(QObject):
             QApplication.processEvents()
             try:
                 import torch
-            except ImportError:
+            except (ImportError, OSError):
                 pass
 
         self._worker = OcrWorker(image, preference, tess_lang, umi_lang, remove_accent)
