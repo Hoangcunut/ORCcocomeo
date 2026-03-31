@@ -77,17 +77,12 @@ class UmiOcrManager:
         exe_path = str(UMI_OCR_EXE_PATH)
         exe_dir  = str(Path(exe_path).parent)
 
-        # ── Phương án 1: os.startfile() ─────────────────────────────────────
-        # Giống user double-click — sạch nhất, không inherit bất kỳ env nào.
-        try:
-            os.startfile(exe_path)
-            self._we_started_it = True
-            return True
-        except Exception:
-            pass
-
-        # ── Phương án 2: subprocess env sạch, KHÔNG dùng CREATE_NO_WINDOW ──
-        # Umi-OCR là GUI app — CREATE_NO_WINDOW block nó khởi động!
+        # ── KHỞI ĐỘNG UMI-OCR.EXE ───────────────────────────────────────────
+        # QUAN TRỌNG: 
+        # 1. Phải set cwd = exe_dir để Umi-OCR tìm thấy model/dll. os.startfile KHÔNG set được.
+        # 2. KHÔNG dùng CREATE_NO_WINDOW vì Umi-OCR là GUI app, flag này có thể block khởi động.
+        # 3. Phải dùng môi trường (env) sạch, không copy từ os.environ của app để tránh conflict 
+        #    về PYTHONPATH, PYTHONUTF8, và PATH chứa thư viện của ứng dụng chính.
         try:
             minimal_env = {
                 k: os.environ[k]
@@ -102,23 +97,8 @@ class UmiOcrManager:
                 env=minimal_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                # KHÔNG dùng CREATE_NO_WINDOW — Umi-OCR là GUI app!
             )
             self._pid = proc.pid
-            self._we_started_it = True
-            return True
-        except Exception:
-            pass
-
-        # ── Phương án 3: ShellExecute qua PowerShell ────────────────────────
-        try:
-            subprocess.Popen(
-                ["powershell", "-Command",
-                 f"Start-Process '{exe_path}' -WorkingDirectory '{exe_dir}'"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
             self._we_started_it = True
             return True
         except Exception:
