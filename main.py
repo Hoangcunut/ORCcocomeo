@@ -20,48 +20,61 @@ import io
 from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [CRITICAL HOTFIX] PyTorch c10.dll WinError 1114 — Giải pháp triệt để
-# ═══════════════════════════════════════════════════════════════════════════════
-# Vấn đề: PyInstaller --windowed mode trên Windows gây 2 lỗi chồng chất:
-#   1) sys.stdout/stderr = None → c10.dll crash khi cố log
-#   2) torch\lib không nằm trong DLL search path → OS không tìm thấy c10.dll
-#
-# Giải pháp: Mock stdout/stderr + Inject torch\lib vào DLL search path
+# [CRITICAL HOTFIX] PyTorch c10.dll WinError 1114 — Giải pháp toàn diện
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Bước 1: Mock stdout/stderr cho --windowed mode
+# Bước 1: Mock stdout/stderr cho PyInstaller --windowed mode
 if sys.stdout is None:
     sys.stdout = io.StringIO()
 if sys.stderr is None:
     sys.stderr = io.StringIO()
 
-# Bước 2: Tìm và inject thư mục torch/lib vào DLL search path
+# Bước 2: Inject tất cả thư mục DLL cần thiết cho PyTorch
 def _fix_torch_dll_path():
-    """Thêm torch\\lib vào DLL search path trước khi import torch."""
-    # Tìm torch/lib trong _internal (PyInstaller onedir)
+    """
+    c10.dll phụ thuộc vcruntime140.dll (ở _internal root)
+    và các DLL torch khác (ở torch/lib). Inject CẢ HAI.
+    """
     if getattr(sys, 'frozen', False):
-        base = Path(sys.executable).parent / "_internal"
+        internal = Path(sys.executable).parent / "_internal"
     else:
-        base = Path(__file__).resolve().parent / ".venv" / "Lib" / "site-packages"
+        internal = Path(__file__).resolve().parent / ".venv" / "Lib" / "site-packages"
 
-    torch_lib = base / "torch" / "lib"
-    if torch_lib.exists():
-        torch_lib_str = str(torch_lib)
-        # Thêm vào PATH environment
-        os.environ["PATH"] = torch_lib_str + os.pathsep + os.environ.get("PATH", "")
-        # Thêm vào DLL search directories (Python 3.8+ trên Windows)
+    dll_dirs = [
+        internal,                    # vcruntime140.dll, msvcp140.dll
+        internal / "torch" / "lib",  # c10.dll, torch_cpu.dll
+    ]
+
+    for dll_dir in dll_dirs:
+        if not dll_dir.exists():
+            continue
+        dll_dir_str = str(dll_dir)
+        current_path = os.environ.get("PATH", "")
+        if dll_dir_str not in current_path:
+            os.environ["PATH"] = dll_dir_str + os.pathsep + current_path
         if hasattr(os, "add_dll_directory"):
             try:
-                os.add_dll_directory(torch_lib_str)
+                os.add_dll_directory(dll_dir_str)
             except OSError:
                 pass
 
+    # Fallback: Windows API trực tiếp
+    torch_lib = internal / "torch" / "lib"
+    if torch_lib.exists():
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetDllDirectoryW(str(torch_lib))
+        except Exception:
+            pass
+
 _fix_torch_dll_path()
 
-# Bước 3: Import torch (không bắt buộc — app vẫn chạy nếu thiếu torch)
+# Bước 3: Import torch — TÙY CHỌN (app chạy bình thường nếu thiếu)
+_TORCH_AVAILABLE = False
 try:
     import torch
-except (ImportError, OSError):
+    _TORCH_AVAILABLE = True
+except Exception:
     pass
 
 from PyQt6.QtCore import QRect, Qt, QTimer
@@ -86,7 +99,6 @@ from src.utils.settings import AppSettings
 def _make_tray_icon() -> QPixmap:
     """
     Tạo icon tray đơn giản bằng code (không cần file ảnh).
-    Giai đoạn 5 sẽ dùng file icon thật từ assets/.
     """
     from PyQt6.QtGui import QPainter, QPen
     pixmap = QPixmap(32, 32)
@@ -100,7 +112,7 @@ def _make_tray_icon() -> QPixmap:
     # Ký tự kéo góc
     painter.setPen(QColor("white"))
     painter.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "✂")
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "\u2702")
     painter.end()
     return pixmap
 
@@ -121,11 +133,11 @@ class SnippingApp:
         self._engine = CaptureEngine()
         self._overlay = ScreenOverlay()
         self._home = HomeWindow()
-        
+
         # Load phím tắt từ settings.json
         mods = tuple(AppSettings.get("hotkey_modifiers"))
         key = AppSettings.get("hotkey_key")
-        
+
         self._hotkey = HotkeyManager(modifiers=mods, key=key)
 
         # ── Kết nối signals ───────────────────────────────────────────────────
@@ -136,7 +148,7 @@ class SnippingApp:
         self._overlay.cancelled.connect(self._on_capture_cancelled)
 
         self._hotkey.activated.connect(self._on_hotkey_activated)
-        
+
         # Nối chức năng từ HomeWindow
         self._home.capture_requested.connect(self._on_capture_requested)
         self._home.hotkey_changed_signal.connect(self._on_hotkey_changed)
@@ -163,12 +175,12 @@ class SnippingApp:
         """Thiết lập icon khay hệ thống với menu chuột phải."""
         icon = QIcon(_make_tray_icon())
         tray = QSystemTrayIcon(icon, self._app)
-        
+
         hk_str = " + ".join([m.strip("<>") for m in AppSettings.get("hotkey_modifiers")] + [AppSettings.get("hotkey_key")]).upper()
         tray.setToolTip(f"{APP_NAME} v{APP_VERSION}\n{hk_str} để chụp")
 
         menu = QMenu()
-        
+
         act_home = QAction("Mở Cửa Sổ Chính", menu)
         act_home.triggered.connect(self._show_home)
         menu.addAction(act_home)
@@ -221,23 +233,21 @@ class SnippingApp:
     def _show_overlay(self) -> None:
         """Hiện overlay chọn vùng (bao gồm cả toolbar tự sinh)."""
         self._overlay.activate()
-        
+
     def _on_capture_requested(self, mode: CaptureMode, delay: int) -> None:
         """Người dùng bấm nút + New trên cửa sổ chính."""
-        self._home.hide() # Giấu cửa sổ Home
-        
+        self._home.hide()  # Giấu cửa sổ Home
+
         # Chuyển mode cho overlay
         self._overlay.set_mode(mode)
 
         if mode in (CaptureMode.RECTANGLE, CaptureMode.FREEFORM, CaptureMode.WINDOW):
             QTimer.singleShot(delay * 1000, self._show_overlay)
         elif mode == CaptureMode.FULLSCREEN:
-            # Full screen sẽ hiện overlay ảo và bóp lập tức
             QTimer.singleShot(delay * 1000, self._show_overlay)
 
     def _on_capture_done(self, result: CaptureResult) -> None:
         """Ảnh đã chụp xong → mở cửa sổ chỉnh sửa."""
-
         # Đóng editor cũ nếu đang mở
         if self._editor and self._editor.isVisible():
             self._editor.close()

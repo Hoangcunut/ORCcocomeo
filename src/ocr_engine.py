@@ -340,14 +340,20 @@ class OcrWorker(QThread):
 
         # ── VietOCR (Tiếng Việt chính xác + overlay) ──────────────────────────
         if pref == EnginePreference.VIETOCR:
-            from src.vietocr_engine import VietOCREngine
-            from src.config import VIETOCR_MODEL, VIETOCR_DEVICE
+            try:
+                from src.vietocr_engine import VietOCREngine
+                from src.config import VIETOCR_MODEL, VIETOCR_DEVICE
+            except (ImportError, OSError) as exc:
+                raise RuntimeError(
+                    f"VietOCR không thể tải được:\n{exc}\n\n"
+                    "Hãy thử dùng engine Umi-OCR hoặc Tesseract thay thế."
+                ) from exc
             _prog("🇻🇳 VietOCR engine đang khởi tạo...")
             engine = VietOCREngine(model_name=VIETOCR_MODEL, device=VIETOCR_DEVICE)
             if not engine.is_available():
                 raise RuntimeError(
-                    "VietOCR chưa được cài.\n"
-                    "Chạy: pip install vietocr torch torchvision"
+                    "VietOCR chưa được cài hoặc torch DLL bị lỗi.\n"
+                    "Hãy dùng engine Umi-OCR hoặc Tesseract thay thế."
                 )
             result = engine.recognize(self._image, progress_cb=_prog)
             self.engine_used.emit("vietocr")
@@ -375,13 +381,18 @@ class OcrWorker(QThread):
                     "Giải nén vào thư mục: custom-snipping-tool/umi-ocr/"
                 )
             if not umi_mgr.is_ready():
-                _prog("⏳ Đang khởi động Umi-OCR...")
+                _prog("⏳ Đang khởi động Umi-OCR (có thể mất 30-40 giây lần đầu)...")
                 umi_mgr.start()
-                if not umi_mgr.wait_ready(20):
-                    raise RuntimeError(
-                        "Umi-OCR không khởi động được trong 20 giây.\n"
-                        "Hãy mở UmiOCR.exe thủ công rồi thử lại."
-                    )
+                if not umi_mgr.wait_ready(40):
+                    # Thử restart lần 2
+                    _prog("🔄 Thử khởi động lại Umi-OCR...")
+                    umi_mgr.stop()
+                    umi_mgr.start()
+                    if not umi_mgr.wait_ready(30):
+                        raise RuntimeError(
+                            "Umi-OCR không khởi động được.\n"
+                            "Hãy thử mở Umi-OCR.exe thủ công rồi bấm OCR lại."
+                        )
             self.engine_used.emit("umi")
             return umi_backend.run(self._image, self._umi_lang, _prog)
 
@@ -389,9 +400,9 @@ class OcrWorker(QThread):
         # Bước 1: thử Umi-OCR
         if umi_mgr.is_available():
             if not umi_mgr.is_ready():
-                _prog("⏳ Đang khởi động Umi-OCR...")
+                _prog("⏳ Đang khởi động Umi-OCR (có thể mất 30-40 giây)...")
                 umi_mgr.start()
-                ready = umi_mgr.wait_ready(15)
+                ready = umi_mgr.wait_ready(40)
             else:
                 ready = True
 
