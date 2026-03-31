@@ -142,6 +142,7 @@ def build_snipping() -> int:
         "--hidden-import", "pytesseract",
         "--collect-data", "PyQt6",
         "--collect-data", "vietocr",
+        "--collect-all", "torch",
         "--paths", str(HERE),
     ]
 

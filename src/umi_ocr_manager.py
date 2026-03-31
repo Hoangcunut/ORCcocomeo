@@ -102,6 +102,7 @@ class UmiOcrManager:
             
             self._process = subprocess.Popen(
                 [exe],
+                cwd=str(Path(exe).parent),
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

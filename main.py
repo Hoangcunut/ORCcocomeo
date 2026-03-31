@@ -15,7 +15,17 @@ Luồng chính:
 from __future__ import annotations
 
 import sys
+import io
 from pathlib import Path
+
+# [CRITICAL HOTFIX] PyTorch Windows DLL Init Bug
+# Trong môi trường PyInstaller --windowed, sys.stdout = None.
+# Các DLL C++ của PyTorch (đặc biệt là c10.dll / fbgemm.dll) sẽ quăng WinError 1114
+# nếu nó cố gắng in warning/log mà không có console hợp lệ. Ta phải mock stream:
+if sys.stdout is None:
+    sys.stdout = io.StringIO()
+if sys.stderr is None:
+    sys.stderr = io.StringIO()
 
 # Eagerly import torch to prevent WinError 1114 when PyQt6 is loaded first
 try:

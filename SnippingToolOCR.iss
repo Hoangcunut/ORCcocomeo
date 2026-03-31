@@ -1,8 +1,9 @@
-﻿[Setup]
+[Setup]
 AppName=SnippingToolOCR
 AppVersion=1.0.0
 AppPublisher=Hoangcunut
 DefaultDirName={autopf}\SnippingToolOCR
+ArchitecturesInstallIn64BitMode=x64
 DisableProgramGroupPage=yes
 OutputBaseFilename=SnippingToolOCR-Setup
 Compression=lzma2/ultra64

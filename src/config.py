@@ -48,8 +48,8 @@ os.environ["TORCH_HOME"] = str(PROJECT_ROOT / "engines" / "vietocr" / ".cache")
 UMI_OCR_HOST: str = os.environ.get("UMI_OCR_HOST", "127.0.0.1:1224")
 
 # Đường dẫn tới Umi-OCR.exe (tìm trong engines/, sau đó fallback dev mode)
-_UMI_OCR_BUNDLE: Path = PROJECT_ROOT / "engines" / "umi-ocr" / "UmiOCR.exe"
-_UMI_OCR_DEV: Path = PROJECT_ROOT / "umi-ocr" / "UmiOCR.exe"
+_UMI_OCR_BUNDLE: Path = PROJECT_ROOT / "engines" / "umi-ocr" / "Umi-OCR.exe"
+_UMI_OCR_DEV: Path = PROJECT_ROOT / "umi-ocr" / "Umi-OCR.exe"
 
 if _UMI_OCR_BUNDLE.exists():
     UMI_OCR_EXE_PATH: Path | None = _UMI_OCR_BUNDLE
